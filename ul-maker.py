@@ -156,17 +156,6 @@ def experiment(U, d, beta):
         # epsilon = 10
         # clip10, clip10Cost = c.CLIP(cost_functions, weights, d, Lc, Uc, adv, epsilon)
 
-        if roroCost > alpha*solCost:
-            print("bug in RORO")
-            print(sol)
-            print(roro)
-            print("alpha: ", alpha)
-            print("cost: ", solCost)
-            print("feasibility: ", np.sum(sol))
-            print("roro cost: ", roroCost)
-            print("roro feasibility: ", np.sum(roro))
-            break
-
         opts.append(sol)
         roros.append(roro)
         lazys.append(lazy)
