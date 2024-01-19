@@ -7,6 +7,7 @@ from scipy.optimize import LinearConstraint
 import scipy.integrate as integrate
 from scipy.special import lambertw
 import numpy as np
+import cvxpy as cp
 import pandas as pd
 import pickle
 
@@ -28,11 +29,15 @@ def generate_cost_function(L, U, std, dim):
     return cost_weight
 
 # weighted_l1_norm computes the weighted L1 norm between two vectors.
-def weighted_l1_norm(vector1, vector2, weights):
-    assert vector1.shape == vector2.shape == weights.shape, "Input arrays must have the same shape."
+def weighted_l1_norm(vector1, vector2, weights, cvxpy=False):
+    if cvxpy:
+        weighted_diff = cp.multiply(cp.abs(vector1 - vector2), weights)
+        weighted_sum = cp.sum(weighted_diff)
+    else:
+        assert vector1.shape == vector2.shape == weights.shape, "Input arrays must have the same shape."
 
-    weighted_diff = np.abs(vector1 - vector2) * weights
-    weighted_sum = np.sum(weighted_diff)
+        weighted_diff = np.abs(vector1 - vector2) * weights
+        weighted_sum = np.sum(weighted_diff)
 
     return weighted_sum
 
@@ -41,21 +46,24 @@ def weighted_l1_norm(vector1, vector2, weights):
 # vals is the time series of cost functions (dim d x T)
 # w is the weight of the switching cost 
 # dim is the dimension
-def objectiveFunction(vars, vals, w, dim):
+def objectiveFunction(vars, vals, w, dim, cpy=False):
     cost = 0.0
     vars = vars.reshape((len(vals), dim))
     n = vars.shape[0]
     # n = len(vars)
     for (i, cost_func) in enumerate(vals):
-        cost += np.dot(cost_func, vars[i])
+        if cpy:
+            cost += (cost_func @ vars[i])
+        else:
+            cost += np.dot(cost_func, vars[i])
         # add switching cost
         if i == 0:
-            cost += weighted_l1_norm(vars[i], np.zeros(dim), w)
+            cost += weighted_l1_norm(vars[i], np.zeros(dim), w, cvxpy=cpy)
         elif i == n-1:
-            cost += weighted_l1_norm(vars[i], vars[i-1], w)
-            cost += weighted_l1_norm(np.zeros(dim), vars[i], w)
+            cost += weighted_l1_norm(vars[i], vars[i-1], w, cvxpy=cpy)
+            cost += weighted_l1_norm(np.zeros(dim), vars[i], w, cvxpy=cpy)
         else:
-            cost += weighted_l1_norm(vars[i], vars[i-1], w)
+            cost += weighted_l1_norm(vars[i], vars[i-1], w, cvxpy=cpy)
     return cost
 
 def negativeObjectiveFunction(vars, vals, w, dim):
@@ -63,34 +71,52 @@ def negativeObjectiveFunction(vars, vals, w, dim):
 
 
 # computing the optimal solution
-cpdef tuple[np.ndarray, float] optimalSolution(list vals, np.ndarray w, int dim):
-    cdef int n
-    cdef list all_bounds, b, row, A
-    cdef np.ndarray x0, xstar
-
-    n = len(vals)
-    all_bounds = [(0,1) for _ in range(0, n*dim)]
-
-    # declare inequality constraint matrix (2n + 1) x (2n + 1)
-    # and the inequality constraint vector (2n + 1)
-    A = []
-    b = []
-    # append first row (deadline constraint)
-    row = [0 for i in range(0, n*dim)]
-    for i in range(0, n*dim):
-        row[i] = 1
-    A.append(row)
-    b.append(1)
-
-    x0 = np.ones(n*dim)
-    try:
-        xstar = minimize(objectiveFunction, x0=x0, args=(vals, w, dim), bounds=all_bounds, constraints=LinearConstraint(A, lb=b, ub=b)).x
-    except:
-        print("something went wrong here")
-        xstar = minimize(objectiveFunction, x0=np.zeros(n*dim), args=(vals, w, dim), bounds=all_bounds, constraints=LinearConstraint(A, lb=b, ub=b)).x
-        return xstar, objectiveFunction(xstar, vals, w, dim)
+def optimalSolution(cost_functions, weights, d):
+    T = len(cost_functions)
+    # declare variables
+    x = cp.Variable((T, d))
+    constraints = [0 <= x, x <= 1]
+    # add deadline constraint
+    constraints += [cp.sum(x) == 1]
+    prob = cp.Problem(cp.Minimize(objectiveFunction(x, cost_functions, weights, d, cpy=True)), constraints)
+    prob.solve()
+    # print("status:", prob.status)
+    # print("optimal value", prob.value)
+    # print("optimal var", x.value)
+    if prob.status == 'optimal':
+        return x.value, prob.value
     else:
-        return xstar, objectiveFunction(xstar, vals, w, dim)
+        return x.value, 0.0
+    
+
+# cpdef tuple[np.ndarray, float] optimalSolution(list vals, np.ndarray w, int dim):
+#     cdef int n
+#     cdef list all_bounds, b, row, A
+#     cdef np.ndarray x0, xstar
+
+#     n = len(vals)
+#     all_bounds = [(0,1) for _ in range(0, n*dim)]
+
+#     # declare inequality constraint matrix (2n + 1) x (2n + 1)
+#     # and the inequality constraint vector (2n + 1)
+#     A = []
+#     b = []
+#     # append first row (deadline constraint)
+#     row = [0 for i in range(0, n*dim)]
+#     for i in range(0, n*dim):
+#         row[i] = 1
+#     A.append(row)
+#     b.append(1)
+
+#     x0 = np.ones(n*dim)
+#     try:
+#         xstar = minimize(objectiveFunction, x0=x0, args=(vals, w, dim), bounds=all_bounds, constraints=LinearConstraint(A, lb=b, ub=b)).x
+#     except:
+#         print("something went wrong here")
+#         xstar = minimize(objectiveFunction, x0=np.zeros(n*dim), args=(vals, w, dim), bounds=all_bounds, constraints=LinearConstraint(A, lb=b, ub=b)).x
+#         return xstar, objectiveFunction(xstar, vals, w, dim)
+#     else:
+#         return xstar, objectiveFunction(xstar, vals, w, dim)
 
 
 # computing the adversarial solution
